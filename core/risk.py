@@ -75,6 +75,30 @@ class RiskManager:
         self._daily_pnl = 0.0
         self._daily_pnl_reset = datetime.now(timezone.utc)
 
+    def reset_day(self, equity: float = 0.0) -> None:
+        """Engine-compatible alias for reset_daily_pnl."""
+        self.reset_daily_pnl()
+        if equity > 0:
+            self._peak_equity = equity
+
+    def size_notional(self, signal: Signal, balance: Balance) -> float:
+        """
+        Compute notional for a signal after conviction-tier sizing.
+        Returns the USD notional, or 0.0 if signal should be skipped.
+        """
+        if signal.conviction < self.config.conviction_standard_min:
+            return 0.0
+
+        if signal.conviction >= self.config.conviction_full_min:
+            fraction = self.config.full_allocation_pct
+        else:
+            fraction = self.config.standard_allocation_pct
+
+        max_notional = balance.equity * self.config.max_position_pct
+        notional = max_notional * fraction
+
+        return min(notional, balance.available_margin)
+
     def update_pnl(self, realized_pnl: float) -> None:
         """Track realized PnL for drawdown circuit breaker."""
         # Reset if new day
@@ -170,3 +194,9 @@ class RiskManager:
             size_fraction=size_fraction,
             notional_usd=notional,
         )
+
+
+# Engine-compatible alias
+class RiskGate(RiskManager):
+    """Alias — engine.py imports RiskGate, same as RiskManager."""
+    pass
