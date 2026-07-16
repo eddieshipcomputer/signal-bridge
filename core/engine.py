@@ -26,7 +26,7 @@ from typing import Awaitable, Callable, Optional
 
 from .base import BrokerAdapter
 from .reconciler import Reconciler, ReconcileResult
-from .risk import RiskConfig, RiskGate, RiskDecision
+from .risk import RiskConfig, RiskManager, RiskDecision
 from .types import (
     Fill,
     Order,
@@ -87,7 +87,7 @@ class Engine:
         # Mutable position state — broker is always truth, this is local cache
         self._positions: dict[str, Position] = {}
         self._reconciler = Reconciler(adapter, self._positions)
-        self._risk = RiskGate(self.risk_config)
+        self._risk = RiskManager(self.risk_config)
 
         # Track daily starting equity for drawdown circuit breaker
         self._day_start_equity: Optional[float] = None
@@ -175,7 +175,7 @@ class Engine:
         risk_result = self._risk.check(
             signal=signal,
             balance=balance,
-            current_positions=self._positions,
+            open_positions=list(self._positions.values()),
         )
 
         if risk_result.decision != RiskDecision.APPROVE:
@@ -194,7 +194,7 @@ class Engine:
             logger.info(f"Signal {signal.ticker}: direction=hold, no action")
             return
 
-        notional = self._risk.size_notional(signal, balance)
+        notional = risk_result.notional_usd
         price = await self.adapter.get_ticker_price(signal.ticker)
         if price <= 0:
             logger.warning(f"Signal {signal.ticker}: bad price {price}, skipping")
@@ -347,7 +347,7 @@ class Engine:
         if self._day_start_date != today:
             self._day_start_date = today
             self._day_start_equity = balance.equity
-            self._risk.reset_day(balance.equity)
+            self._risk.reset_daily_pnl()
 
 
 class SignalSource:
