@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Equities Signal Schema",
+  "description": "Signal schema for equities (Alpaca, IBKR, etc)",
+  "allOf": [
+    { "$ref": "base.json" },
+    {
+      "type": "object",
+      "properties": {
+        "short_interest": {
+          "type": ["number", "null"],
+          "description": "Short interest as % of float"
+        },
+        "earnings_date": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Next earnings date"
+        },
+        "insider_activity": {
+          "type": "boolean",
+          "default": false
+        },
+        "sector": {
+          "type": "string",
+          "description": "GICS sector for concentration checks"
+        }
+      }
+    }
+  ]
+}

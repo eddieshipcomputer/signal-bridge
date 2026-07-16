@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Base Signal Schema",
+  "description": "Required fields for every signal regardless of asset class",
+  "type": "object",
+  "required": [
+    "ticker",
+    "direction",
+    "conviction",
+    "entry_zone_low",
+    "entry_zone_high",
+    "sl_pct",
+    "tp_pct"
+  ],
+  "properties": {
+    "ticker": {
+      "type": "string",
+      "description": "Asset identifier (e.g. BTC, AAPL)"
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["long", "short"]
+    },
+    "conviction": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 7,
+      "description": "Conviction score. 1-3 = skip, 4-5 = standard, 6-7 = full size"
+    },
+    "entry_zone_low": {
+      "type": "number",
+      "description": "Lower bound of acceptable entry price"
+    },
+    "entry_zone_high": {
+      "type": "number",
+      "description": "Upper bound of acceptable entry price"
+    },
+    "sl_pct": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Stop loss as % below entry (e.g. 0.05 = 5%)"
+    },
+    "tp_pct": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Take profit as % above entry (e.g. 0.15 = 15%)"
+    },
+    "entry_session": {
+      "type": "string",
+      "enum": ["open", "power_hour", "any"],
+      "default": "any"
+    },
+    "time_in_force": {
+      "type": ["integer", "null"],
+      "description": "Bars or days until signal expires"
+    },
+    "catalyst_date": {
+      "type": ["string", "null"],
+      "format": "date",
+      "description": "ISO date of catalyst event (earnings, FDA, etc)"
+    },
+    "regime_flag": {
+      "type": "string",
+      "default": "neutral"
+    },
+    "max_positions": {
+      "type": "integer",
+      "default": 5,
+      "description": "Portfolio-level cap on concurrent positions"
+    },
+    "strategy_id": {
+      "type": "string",
+      "default": ""
+    }
+  }
+}
