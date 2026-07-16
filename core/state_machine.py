@@ -224,12 +224,22 @@ class PositionStateMachine:
         """
         Called by reconciler when position disappears from broker.
         Can transition from any active state to CLOSED.
+
+        Broker truth wins — bypass transition validation since
+        the position is already gone from the exchange.
         """
-        if position.status in (PositionStatus.PENDING, PositionStatus.FILLED,
-                                PositionStatus.MANAGING, PositionStatus.CLOSING):
-            # Allow external close from any active state
-            VALID_TRANSITIONS[position.status].add(PositionStatus.CLOSED)
-            self.transition(
-                position, PositionStatus.CLOSED,
-                detail=f"External close (was {position.status.value})"
-            )
+        if position.status == PositionStatus.CLOSED:
+            return  # already closed
+
+        old = position.status
+        if old == PositionStatus.FLAT:
+            return  # nothing to close
+
+        # Force the transition — broker says it's closed, it's closed.
+        # Don't mutate VALID_TRANSITIONS (that would leak across positions).
+        position.status = PositionStatus.CLOSED
+        position.closed_at = datetime.now(timezone.utc)
+        logger.info(
+            f"StateMachine: {position.ticker} external close "
+            f"(was {old.value}) — broker truth"
+        )
