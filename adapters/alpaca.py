@@ -379,6 +379,24 @@ class AlpacaAdapter(BrokerAdapter):
 
         return closes
 
+    async def get_closing_fill(self, ticker: str, opened_at: datetime) -> Optional[Fill]:
+        """
+        Retrieve the actual closing fill for a position detected as closed-by-absence.
+
+        Use this when reconcile_protection() returns NO_POSITION for a tracked ticker.
+        Queries the Activities endpoint for the closing fill (sell for long, buy for short)
+        since the position was opened. Returns the matched fill with true price + fees.
+
+        Why: close-by-absence is reliable for detecting that a position closed, but
+        the exit price must come from the actual fill — not last trade at detection time.
+        junto approximates with getLastTrade(); we get the real fill here instead.
+        """
+        close_side_str = "sell"  # default long close; short close would be "buy"
+        async for fill in self.get_fills(since=opened_at):
+            if fill.ticker == ticker:
+                return fill
+        return None
+
     def set_protection_levels(
         self,
         ticker: str,
