@@ -27,6 +27,7 @@ from typing import Awaitable, Callable, Optional
 from .base import BrokerAdapter
 from .reconciler import Reconciler, ReconcileResult
 from .risk import RiskConfig, RiskManager, RiskDecision
+from .state_machine import PositionStateMachine, StateMachineError
 from .types import (
     Fill,
     Order,
@@ -88,6 +89,7 @@ class Engine:
         self._positions: dict[str, Position] = {}
         self._reconciler = Reconciler(adapter, self._positions)
         self._risk = RiskManager(self.risk_config)
+        self._sm = PositionStateMachine()
 
         # Track daily starting equity for drawdown circuit breaker
         self._day_start_equity: Optional[float] = None
@@ -186,12 +188,18 @@ class Engine:
                 await self.on_risk_reject(signal, risk_result.decision, risk_result.detail)
             return
 
-        # handle exit/hold directions without placing entry orders
-        if signal.direction == Side.EXIT:
-            await self._close_position(signal.ticker, reason="signal_exit")
-            return
-        if signal.direction == Side.HOLD:
-            logger.info(f"Signal {signal.ticker}: direction=hold, no action")
+        # handle exit/hold directions via state machine
+        if signal.direction in (Side.EXIT, Side.HOLD):
+            existing = self._positions.get(signal.ticker)
+            if existing:
+                try:
+                    self._sm.accept_signal(existing, signal)
+                except StateMachineError as e:
+                    logger.warning(f"State machine rejected {signal.direction} for {signal.ticker}: {e}")
+                if signal.direction == Side.EXIT:
+                    await self._close_position(signal.ticker, reason="signal_exit")
+            else:
+                logger.info(f"Signal {signal.ticker}: {signal.direction} but no open position")
             return
 
         notional = risk_result.notional_usd
@@ -224,19 +232,33 @@ class Engine:
             )
             return
 
+        # Transition to PENDING via state machine before placing order
+        existing = self._positions.get(signal.ticker)
+        try:
+            pos = self._sm.accept_signal(existing, signal)
+        except StateMachineError as e:
+            logger.warning(f"State machine rejected entry for {signal.ticker}: {e}")
+            return
+        self._positions[signal.ticker] = pos
+
         try:
             fill = await self.adapter.place_order(order)
+            self._sm.on_fill(pos)
             logger.info(
                 f"Filled: {signal.ticker} {signal.direction} "
                 f"qty={fill.size} @ {fill.price} fee={fill.fee}"
             )
-            await self._on_entry_fill(signal, fill)
+            await self._on_entry_fill(signal, fill, pos)
             if self.on_fill:
                 await self.on_fill(signal, fill)
         except Exception as e:
             logger.error(f"Order placement failed for {signal.ticker}: {e}")
+            # Roll back to flat if order never got out
+            if pos.status == PositionStatus.PENDING:
+                self._sm.transition(pos, PositionStatus.FLAT, detail="order failed")
+                del self._positions[signal.ticker]
 
-    async def _on_entry_fill(self, signal: Signal, fill: Fill) -> None:
+    async def _on_entry_fill(self, signal: Signal, fill: Fill, pos: Position) -> None:
         """Set up position state and place SL/TP triggers after entry fill."""
         entry_price = fill.price
         sl_price = entry_price * (1 - signal.sl_pct / 100)
@@ -272,28 +294,26 @@ class Engine:
         except Exception as e:
             logger.error(f"TP placement failed for {signal.ticker}: {e}")
 
+        # Update position with fill data
+        pos.size = fill.size
+        pos.entry_price = entry_price
+        pos.current_price = entry_price
+        pos.symbol = signal.ticker
+        pos.trigger_ids = [tid for tid in [sl_id, tp_id] if tid]
+
         # Register protection levels for synthetic sweep (Alpaca equities)
         if hasattr(self.adapter, "set_protection_levels"):
             self.adapter.set_protection_levels(signal.ticker, sl=sl_price, tp=tp_price)
 
-        pos = Position(
-            ticker=signal.ticker,
-            symbol=signal.ticker,
-            side=signal.direction,
-            size=fill.size,
-            entry_price=entry_price,
-            current_price=entry_price,
-            status=PositionStatus.MANAGING,
-            strategy_id=signal.strategy_id,
-            trigger_ids=[tid for tid in [sl_id, tp_id] if tid],
-        )
-        self._positions[signal.ticker] = pos
+        # Transition to MANAGING via state machine
+        self._sm.on_protected(pos)
 
     # ── Reconciler event handling ────────────────────────────────────────────
 
     async def _handle_reconcile_result(self, result: ReconcileResult) -> None:
         for pos in result.closed:
             closing_fill = result.closing_fills.get(pos.ticker)
+            self._sm.on_external_close(pos)
             logger.info(
                 f"Position closed: {pos.ticker} "
                 f"exit_price={closing_fill.price if closing_fill else 'unknown'}"
