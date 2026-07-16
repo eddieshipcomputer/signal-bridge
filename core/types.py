@@ -16,6 +16,8 @@ from typing import Optional
 class Side(str, Enum):
     LONG = "long"
     SHORT = "short"
+    EXIT = "exit"       # close an existing position
+    HOLD = "hold"        # re-qualify at lower conviction, don't re-propose
 
 
 class OrderType(str, Enum):
@@ -37,6 +39,15 @@ class TriggerType(str, Enum):
     STOP_LIMIT = "stop_limit"
 
 
+class ProtectionStatus(str, Enum):
+    """Result of checking SL/TP coverage for a position."""
+    NATIVE = "native"           # resting broker order covers it
+    SYNTHETIC = "synthetic"     # no resting stop, needs tick-time sweep
+    NO_POSITION = "no_position" # position doesn't exist (may have closed externally)
+    NO_LEVELS = "no_levels"     # position exists but no SL/TP configured
+    ERROR = "error"
+
+
 class PositionStatus(str, Enum):
     FLAT = "flat"
     PENDING = "pending"       # signal accepted, waiting for entry trigger
@@ -46,26 +57,57 @@ class PositionStatus(str, Enum):
     CLOSED = "closed"         # flat again, PnL realized
 
 
+class AssetClass(str, Enum):
+    EQUITY = "equity"
+    CRYPTO = "crypto"
+
+
 @dataclass
 class Position:
-    """An open or historical position."""
-    ticker: str
-    side: Side
-    size: float                  # quantity in base units
-    entry_price: float
-    leverage: float = 1.0        # 1.0 = spot, higher = margined
+    """An open or historical position. Maps to junto's NormalizedPosition."""
+    ticker: str                     # base asset (e.g. 'ETH', 'AAPL')
+    symbol: str = ""                # venue-native symbol (e.g. 'ETH/USD', 'AAPL')
+    side: Side = Side.LONG
+    size: float = 0.0               # quantity in base units
+    entry_price: float = 0.0
+    current_price: float = 0.0
+    asset_class: AssetClass = AssetClass.CRYPTO
+    leverage: float = 1.0           # 1.0 = spot, higher = margined
     liquidation_price: Optional[float] = None
     unrealized_pnl: float = 0.0
     margin_used: float = 0.0
     status: PositionStatus = PositionStatus.FILLED
     opened_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     closed_at: Optional[datetime] = None
-    strategy_id: str = ""        # which strategy opened this
+    strategy_id: str = ""           # which strategy opened this
     trigger_ids: list[str] = field(default_factory=list)  # SL/TP order IDs
 
     @property
     def notional(self) -> float:
         return self.size * self.entry_price
+
+
+@dataclass
+class ProtectionOutcome:
+    """Result of checking/provisioning SL/TP coverage for a position.
+
+    Borrowed from junto's pattern — models protection intent, letting
+    each adapter satisfy it natively (resting order) or synthetically (tick sweep).
+    """
+    ticker: str
+    status: ProtectionStatus = ProtectionStatus.NO_POSITION
+    detail: str = ""
+
+
+@dataclass
+class SyntheticClose:
+    """A position closed by the synthetic tick-time sweep."""
+    ticker: str
+    side: Side
+    size: float
+    close_price: float
+    reason: str = ""              # e.g. 'stop_loss_hit', 'take_profit_hit'
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass

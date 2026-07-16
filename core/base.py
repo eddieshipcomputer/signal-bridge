@@ -1,9 +1,12 @@
 """
 signal-bridge — Abstract broker interface.
 
-All adapters must implement this interface. The core engine interacts
-with brokers exclusively through BrokerAdapter — no broker-specific
-types or API calls leak into core.
+Uses junto's ProtectionOutcome pattern: model protection intent, let each
+adapter satisfy it natively (resting broker order) or synthetically
+(tick-time sweep). Eliminates the modify_order atomicity problem.
+
+All broker-specific logic lives in adapters. Core engine interacts
+exclusively through BrokerAdapter — no broker types leak into core.
 """
 
 from __future__ import annotations
@@ -13,11 +16,14 @@ from datetime import datetime
 from typing import AsyncIterator, Optional
 
 from .types import (
+    AssetClass,
     Balance,
     Fill,
     Order,
     OrderStatus,
     Position,
+    ProtectionOutcome,
+    SyntheticClose,
     TriggerOrder,
 )
 
@@ -34,17 +40,34 @@ class BrokerAdapter(ABC):
     - Exchange API is always ground truth — never estimate.
     - Methods map native broker types to shared dataclasses (core.types).
     - Errors raise exceptions; the engine handles retries/fallbacks.
+
+    Reference: junto's lib/trading/adapter.ts (TypeScript, production).
     """
 
+    broker: str = "base"
+
     @abstractmethod
-    async def get_positions(self) -> list[Position]:
-        """Return all open positions from the exchange."""
+    async def is_market_open(self) -> bool:
+        """
+        Whether the market is currently open for trading.
+        Crypto (HL): always True (24/7).
+        Equities (Alpaca): session-aware (9:30-16:00 ET weekdays).
+        """
         ...
 
     @abstractmethod
-    async def get_position(self, ticker: str) -> Optional[Position]:
-        """Return position for a single ticker, or None if flat."""
+    async def list_positions(self) -> list[Position]:
+        """Return all open positions from the exchange (normalized)."""
         ...
+
+    async def get_position(self, ticker: str) -> Optional[Position]:
+        """Return position for a single ticker, or None if flat.
+        Default impl scans list_positions — adapters may override for efficiency."""
+        positions = await self.list_positions()
+        for p in positions:
+            if p.ticker == ticker:
+                return p
+        return None
 
     @abstractmethod
     async def get_account_balance(self) -> Balance:
@@ -78,18 +101,6 @@ class BrokerAdapter(ABC):
         ...
 
     @abstractmethod
-    async def modify_order(self, order_id: str, modifications: dict) -> bool:
-        """
-        Modify an existing order or trigger.
-
-        NOTE: Not guaranteed to be atomic. Some brokers (HL) support
-        in-place modification; others (Alpaca) do cancel + replace.
-        Callers should not assume atomicity.
-        Returns True if the modification eventually succeeded.
-        """
-        ...
-
-    @abstractmethod
     async def get_fills(self, since: datetime) -> AsyncIterator[Fill]:
         """
         Yield fills since the given timestamp.
@@ -105,18 +116,36 @@ class BrokerAdapter(ABC):
 
     @abstractmethod
     async def get_ticker_price(self, ticker: str) -> float:
+        """Return current price for a ticker."""
+        ...
+
+    @abstractmethod
+    async def reconcile_protection(self) -> list[ProtectionOutcome]:
         """
-        Return current price for a ticker.
-        For equities: real-time during market hours only.
-        Check is_market_open() before relying on this for entry zone checks.
+        Ensure every open trade has stop/target coverage.
+
+        Returns one ProtectionOutcome per known position:
+        - native: resting broker order covers it
+        - synthetic: no resting stop, needs tick-time sweep
+        - no_position: position doesn't exist (may have closed externally)
+        - no_levels: position exists but no SL/TP configured
+        - error: check failed
+
+        This is the CORRECT abstraction for SL/TP management — not modify_order.
+        Borrowed from junto's production pattern.
         """
         ...
 
     @abstractmethod
-    async def is_market_open(self) -> bool:
+    async def enforce_stops_on_tick(self) -> list[SyntheticClose]:
         """
-        Whether the market is currently open for trading.
-        Crypto (HL): always True (24/7).
-        Equities (Alpaca): session-aware (9:30-16:00 ET weekdays).
+        Synthetic tick-time sweep — evaluates levels and closes positions
+        where the venue has no resting stop.
+
+        No-op for venues with full native stop support (e.g. HL perps).
+        Active for venues like Alpaca that may not have resting stops on
+        certain order types.
+
+        Returns list of SyntheticClose for any positions closed this tick.
         """
         ...

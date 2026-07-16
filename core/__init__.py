@@ -1,6 +1,7 @@
 """signal-bridge core package."""
 
 from .types import (
+    AssetClass,
     Balance,
     Fill,
     Order,
@@ -8,14 +9,18 @@ from .types import (
     OrderType,
     Position,
     PositionStatus,
+    ProtectionOutcome,
+    ProtectionStatus,
     Side,
     Signal,
+    SyntheticClose,
     TriggerOrder,
     TriggerType,
 )
 from .base import BrokerAdapter
 
 __all__ = [
+    "AssetClass",
     "BrokerAdapter",
     "Balance",
     "Fill",
@@ -24,8 +29,11 @@ __all__ = [
     "OrderType",
     "Position",
     "PositionStatus",
+    "ProtectionOutcome",
+    "ProtectionStatus",
     "Side",
     "Signal",
+    "SyntheticClose",
     "TriggerOrder",
     "TriggerType",
 ]

@@ -19,7 +19,8 @@
     },
     "direction": {
       "type": "string",
-      "enum": ["long", "short"]
+      "enum": ["long", "short", "exit", "hold"],
+      "description": "Entry direction or position action (exit/hold)"
     },
     "conviction": {
       "type": "integer",
